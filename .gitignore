@@ -13,3 +13,10 @@ models/*.onnx
 # Editor
 .vscode/
 .idea/
+
+# Release GUI 빌드 산출물
+scripts/release-build/
+scripts/release-dist/
+scripts/YT-Release.spec
+scripts/__pycache__/
+**/__pycache__/

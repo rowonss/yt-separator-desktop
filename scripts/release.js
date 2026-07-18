@@ -164,29 +164,67 @@ if (!token) die('GH_TOKEN 환경변수가 필요합니다.\n  PowerShell: $env:G
   }
   if (!release?.id) die(`릴리즈 ${tag} id 획득 실패`);
 
-  // 7) latest.yml 존재 확인 + 필요시 업로드
-  const assets = release.assets || [];
-  const has = (name) => assets.some(a => a.name === name);
-
-  if (!has('latest.yml')) {
-    warn('latest.yml 누락 — 수동 업로드');
-    const p = path.join('dist', 'latest.yml');
-    if (!fs.existsSync(p)) die('dist/latest.yml 파일이 없어요 (빌드 실패?)');
-    await uploadAsset(release.id, 'latest.yml', p);
-    done('latest.yml 업로드 완료');
-  } else {
-    done('latest.yml 이미 존재');
+  // 7) latest.yml 준비 (없으면 NSIS만 재빌드해서 재생성)
+  const localLatest = path.join('dist', 'latest.yml');
+  if (!fs.existsSync(localLatest)) {
+    warn('dist/latest.yml 누락 — NSIS만 재빌드하여 재생성...');
+    try {
+      sh('npx electron-builder --win nsis --publish never', {
+        env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
+      });
+    } catch { /* proceed */ }
   }
+  if (!fs.existsSync(localLatest)) die('latest.yml 재생성 실패');
 
-  // 8) Setup.exe / Portable.exe 확인
-  const missing = [];
-  for (const f of assets.map(a => a.name)) {
-    // 정보성 로그만
-  }
+  // 8) Assets 정합성 검사 — Setup.exe의 sha가 latest.yml과 다르면 교체
+  //    (electron-builder 크래시로 latest.yml 재생성 후에도 GitHub의 exe는 옛 sha일 수 있음)
+  const latestYml = fs.readFileSync(localLatest, 'utf-8');
+  const latestSize = parseInt((latestYml.match(/^\s*size:\s*(\d+)/m) || [])[1] || '0', 10);
   const expectedSetup    = `YT-Separator-${version}-Setup.exe`;
+  const expectedBlockmap = `${expectedSetup}.blockmap`;
   const expectedPortable = `YT-Separator-${version}-Portable.exe`;
-  if (!has(expectedSetup))    warn(`${expectedSetup} 누락 — GitHub에서 확인 필요`);
-  if (!has(expectedPortable)) warn(`${expectedPortable} 누락 — GitHub에서 확인 필요`);
+  const localSetup    = path.join('dist', `YT Separator-${version}-Setup.exe`);
+  const localBlockmap = `${localSetup}.blockmap`;
+  const localPortable = path.join('dist', `YT Separator-${version}-Portable.exe`);
+
+  const assets = release.assets || [];
+  const findAsset = (name) => assets.find(a => a.name === name);
+
+  // Setup.exe 정합성
+  const setupAsset = findAsset(expectedSetup);
+  if (setupAsset && latestSize && setupAsset.size !== latestSize) {
+    warn(`Setup.exe 크기 불일치 (GitHub ${setupAsset.size} vs latest.yml ${latestSize}) — 교체`);
+    await ghApi(`/repos/${REPO}/releases/assets/${setupAsset.id}`, 'DELETE');
+    await uploadAsset(release.id, expectedSetup, localSetup);
+    done(`${expectedSetup} 교체 완료`);
+  } else if (!setupAsset && fs.existsSync(localSetup)) {
+    log(`${expectedSetup} 업로드...`);
+    await uploadAsset(release.id, expectedSetup, localSetup);
+    done(`${expectedSetup} 업로드 완료`);
+  }
+
+  // Blockmap
+  if (!findAsset(expectedBlockmap) && fs.existsSync(localBlockmap)) {
+    log(`${expectedBlockmap} 업로드...`);
+    await uploadAsset(release.id, expectedBlockmap, localBlockmap);
+    done(`${expectedBlockmap} 업로드 완료`);
+  }
+
+  // Portable.exe (있으면 참고용)
+  if (!findAsset(expectedPortable) && fs.existsSync(localPortable)) {
+    log(`${expectedPortable} 업로드...`);
+    await uploadAsset(release.id, expectedPortable, localPortable);
+    done(`${expectedPortable} 업로드 완료`);
+  }
+
+  // latest.yml
+  const latestAsset = findAsset('latest.yml');
+  if (latestAsset) {
+    // 갱신 위해 삭제 후 재업로드
+    await ghApi(`/repos/${REPO}/releases/assets/${latestAsset.id}`, 'DELETE');
+  }
+  await uploadAsset(release.id, 'latest.yml', localLatest);
+  done('latest.yml 업로드 완료');
 
   console.log();
   done(`릴리즈 ${tag} 완료`);
