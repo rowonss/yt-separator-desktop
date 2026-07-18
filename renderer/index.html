@@ -47,6 +47,20 @@
     </div>
   </div>
 
+  <div id="model-dl-dialog" class="update-dialog" hidden>
+    <div class="update-dialog-card">
+      <div class="update-dialog-title" id="model-dl-title">모델 다운로드</div>
+      <div class="update-dialog-body" id="model-dl-body"></div>
+      <div class="update-dialog-progress" id="model-dl-progress">
+        <div class="progress-bar"><div id="model-dl-fill" class="progress-fill"></div></div>
+        <div id="model-dl-info" class="info"></div>
+      </div>
+      <div class="update-dialog-actions">
+        <button id="model-dl-cancel" class="btn">취소</button>
+      </div>
+    </div>
+  </div>
+
   <div id="update-dialog" class="update-dialog" hidden>
     <div class="update-dialog-card">
       <div class="update-dialog-title" id="update-dialog-title">업데이트</div>
@@ -81,6 +95,15 @@
           로컬 파일 열기
         </button>
         <span class="settings-hint">인터넷 없이 로컬 파일도 분리 가능</span>
+      </div>
+
+      <div class="settings-row">
+        <span class="settings-label">모델</span>
+        <div class="pill-row" id="model-pills">
+          <button class="pill on" data-model="4stem">4-stem</button>
+          <button class="pill" data-model="6stem">6-stem</button>
+        </div>
+        <span id="model-status" class="settings-hint"></span>
       </div>
 
       <div class="settings-row">

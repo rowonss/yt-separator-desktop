@@ -1,7 +1,7 @@
 'use strict';
 // Library view — 좌측 리스트 + 우측 플레이어
 
-import { Player, STEM_META, STEM_ORDER, loadStemFilesToBuffers, toYtsepUrl } from './player.js';
+import { Player, STEM_META, stemOrderFor, loadStemFilesToBuffers, toYtsepUrl } from './player.js';
 
 const api = window.yssApi;
 const $ = (id) => document.getElementById(id);
@@ -176,7 +176,7 @@ async function mountPlayer(item) {
     currentPlayer = new Player(playerVideo, videoUrl, stems, sampleRate);
 
     // 믹서 트랙
-    for (const name of STEM_ORDER) {
+    for (const name of stemOrderFor(item.modelKey || '4stem')) {
       if (!stems[name]) continue;
       const meta = STEM_META[name];
       const row = document.createElement('div');

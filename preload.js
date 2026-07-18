@@ -53,7 +53,15 @@ contextBridge.exposeInMainWorld('yssApi', {
 
   // stem 분리
   stem: {
-    modelBytes:   () => ipcRenderer.invoke('stem:modelBytes'),
+    models:        ()      => ipcRenderer.invoke('stem:models'),
+    ensureModel:   (key)   => ipcRenderer.invoke('stem:ensureModel', key),
+    cancelDownload:(key)   => ipcRenderer.invoke('stem:cancelModelDownload', key),
+    onDownloadProgress: (fn) => {
+      const h = (_ev, data) => fn(data);
+      ipcRenderer.on('stem:modelDownloadProgress', h);
+      return () => ipcRenderer.off('stem:modelDownloadProgress', h);
+    },
+    modelBytes:   (key)    => ipcRenderer.invoke('stem:modelBytes', key),
     extractAudio: (videoPath) => ipcRenderer.invoke('stem:extractAudio', videoPath),
     saveStems:    (stems, baseName, sampleRate) => ipcRenderer.invoke('stem:saveStems', stems, baseName, sampleRate),
   },

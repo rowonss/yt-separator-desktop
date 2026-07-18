@@ -3,12 +3,18 @@
 // Video 이벤트(play/pause/seek/ratechange)에 stem source를 sync.
 
 export const STEM_META = {
-  vocals: { label: '보컬',   color: '#e15b5b' },
-  drums:  { label: '드럼',   color: '#e6c33a' },
-  bass:   { label: '베이스', color: '#4b7bff' },
-  other:  { label: '기타',   color: '#e75ea0' },
+  vocals: { label: '보컬',    color: '#e15b5b' },
+  drums:  { label: '드럼',    color: '#e6c33a' },
+  bass:   { label: '베이스',  color: '#4b7bff' },
+  other:  { label: '기타(그외)', color: '#e75ea0' },
+  guitar: { label: '기타',    color: '#f97316' },
+  piano:  { label: '피아노',  color: '#a78bfa' },
 };
-export const STEM_ORDER = ['vocals', 'bass', 'drums', 'other'];
+export const STEM_ORDER   = ['vocals', 'bass', 'drums', 'other'];
+export const STEM_ORDER_6 = ['vocals', 'guitar', 'bass', 'drums', 'piano', 'other'];
+export function stemOrderFor(modelKey) {
+  return modelKey === '6stem' ? STEM_ORDER_6 : STEM_ORDER;
+}
 
 /** 파일 시스템 경로 → ytsep://f/... URL */
 export function toYtsepUrl(p) {
@@ -105,7 +111,7 @@ export class Player {
 
     // 원본 Float32 (pitch shift 재처리용) 복사 저장
     this.stemsOrig = {};
-    for (const name of STEM_ORDER) {
+    for (const name of Object.keys(stems)) {
       if (!stems[name]) continue;
       const [L, R] = stems[name];
       this.stemsOrig[name] = [new Float32Array(L), new Float32Array(R)];
@@ -117,7 +123,7 @@ export class Player {
     this.stemGains   = {};
     this.stemVolumes = {};
     this.stemMuted   = {};
-    for (const name of STEM_ORDER) {
+    for (const name of Object.keys(stems)) {
       const arr = stems[name];
       if (!arr) continue;
       const [L, R] = arr;

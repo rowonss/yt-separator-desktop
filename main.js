@@ -380,18 +380,164 @@ ipcMain.handle('ytdlp:cancel', () => {
   return false;
 });
 
-// ── STEM: 모델 로드 (renderer에게 ArrayBuffer 넘겨줌) ────
-function modelPath() {
-  const base = isDev ? __dirname : process.resourcesPath;
-  return path.join(base, 'models', 'htdemucs_core.onnx');
+// ── STEM: 모델 관리 ─────────────────────────────────────
+// 각 모델은 GitHub Release 'models-v1'에서 on-demand 다운로드.
+// 저장 위치: userData/models/<file>. 앱 업데이트 후에도 유지됨.
+const MODELS = {
+  '4stem': {
+    key:      '4stem',
+    label:    '4-stem (htdemucs)',
+    file:     'htdemucs_core.onnx',
+    sources:  4,
+    stems:    ['drums', 'bass', 'other', 'vocals'],
+    size:     174735359,    // 대략 크기 (진행률용). 실제 크기가 달라도 무해.
+    url:      'https://github.com/rowonss/yt-separator-desktop/releases/download/models-v1/htdemucs_core.onnx',
+  },
+  '6stem': {
+    key:      '6stem',
+    label:    '6-stem (htdemucs_6s)',
+    file:     'htdemucs_6s.onnx',
+    sources:  6,
+    stems:    ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano'],
+    size:     115343360,
+    url:      'https://github.com/rowonss/yt-separator-desktop/releases/download/models-v1/htdemucs_6s.onnx',
+  },
+};
+const DEFAULT_MODEL_KEY = '4stem';
+
+function modelsDir() {
+  const dir = path.join(app.getPath('userData'), 'models');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
-ipcMain.handle('stem:modelBytes', async () => {
-  const p = modelPath();
-  if (!fs.existsSync(p)) return { ok: false, error: 'model file missing: ' + p };
+function modelPath(key) {
+  const m = MODELS[key] || MODELS[DEFAULT_MODEL_KEY];
+  return path.join(modelsDir(), m.file);
+}
+/** 이전 번들 위치(installed/dev)에서 userData로 마이그레이션 (있으면 복사) */
+function migrateBundledModel(key) {
+  const dest = modelPath(key);
+  if (fs.existsSync(dest)) return;
+  const m = MODELS[key];
+  const bundledBase = isDev ? __dirname : process.resourcesPath;
+  const bundled = path.join(bundledBase, 'models', m.file);
+  if (fs.existsSync(bundled)) {
+    try {
+      fs.copyFileSync(bundled, dest);
+      console.log(`[model] migrated bundled ${key} → ${dest}`);
+    } catch (e) { console.warn('[model] migrate failed', e.message); }
+  }
+}
+
+/** 진행률을 renderer로 forward */
+function sendModelProgress(key, payload) {
+  if (mainWindow?.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('stem:modelDownloadProgress', { key, ...payload });
+  }
+}
+
+const activeDownloads = new Map();  // key → { req, canceled }
+
+/** 모델 파일 확보 (없으면 다운로드). 성공 시 파일 경로 반환 */
+async function ensureModel(key) {
+  migrateBundledModel(key);
+  const dest = modelPath(key);
+  if (fs.existsSync(dest)) return dest;
+
+  const m = MODELS[key];
+  if (!m) throw new Error('unknown model: ' + key);
+
+  if (activeDownloads.has(key)) throw new Error('이미 다운로드 중');
+
+  sendModelProgress(key, { phase: 'start', total: m.size });
+  const tmp = dest + '.part';
+  try { fs.unlinkSync(tmp); } catch {}
+
+  return await new Promise((resolve, reject) => {
+    const state = { req: null, canceled: false };
+    activeDownloads.set(key, state);
+
+    const fetchOnce = (url, redirects = 0) => {
+      if (redirects > 5) { activeDownloads.delete(key); return reject(new Error('too many redirects')); }
+      const https = require('https');
+      const req = https.get(url, { headers: { 'User-Agent': 'yt-separator' } }, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
+          res.resume();
+          return fetchOnce(res.headers.location, redirects + 1);
+        }
+        if (res.statusCode !== 200) {
+          activeDownloads.delete(key);
+          return reject(new Error(`HTTP ${res.statusCode} 모델 다운로드 실패`));
+        }
+        const total = parseInt(res.headers['content-length'] || m.size, 10);
+        let received = 0;
+        const out = fs.createWriteStream(tmp);
+        res.on('data', (chunk) => {
+          if (state.canceled) { res.destroy(); out.destroy(); return; }
+          received += chunk.length;
+          sendModelProgress(key, { phase: 'progress', received, total });
+        });
+        res.pipe(out);
+        out.on('finish', () => {
+          out.close(() => {
+            activeDownloads.delete(key);
+            if (state.canceled) { try { fs.unlinkSync(tmp); } catch {} return reject(new Error('취소됨')); }
+            try { fs.renameSync(tmp, dest); } catch (e) { return reject(e); }
+            sendModelProgress(key, { phase: 'done' });
+            resolve(dest);
+          });
+        });
+        out.on('error', (e) => { activeDownloads.delete(key); reject(e); });
+      });
+      req.on('error', (e) => { activeDownloads.delete(key); reject(e); });
+      state.req = req;
+    };
+    fetchOnce(m.url);
+  });
+}
+
+ipcMain.handle('stem:models', () => {
+  const out = {};
+  for (const [k, m] of Object.entries(MODELS)) {
+    const p = modelPath(k);
+    let downloaded = fs.existsSync(p);
+    if (!downloaded) { migrateBundledModel(k); downloaded = fs.existsSync(p); }
+    out[k] = {
+      key: k, label: m.label, sources: m.sources, stems: m.stems, size: m.size,
+      downloaded,
+      downloading: activeDownloads.has(k),
+    };
+  }
+  return { ok: true, models: out, defaultKey: DEFAULT_MODEL_KEY };
+});
+
+ipcMain.handle('stem:ensureModel', async (_ev, key) => {
+  try {
+    const p = await ensureModel(key);
+    return { ok: true, path: p };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('stem:cancelModelDownload', (_ev, key) => {
+  const s = activeDownloads.get(key);
+  if (!s) return { ok: false, error: 'not downloading' };
+  s.canceled = true;
+  try { s.req.destroy(); } catch {}
+  activeDownloads.delete(key);
+  return { ok: true };
+});
+
+/** 렌더러에게 ArrayBuffer 전달. 모델이 없으면 다운로드 유도 (에러 반환) */
+ipcMain.handle('stem:modelBytes', async (_ev, key = DEFAULT_MODEL_KEY) => {
+  const m = MODELS[key];
+  if (!m) return { ok: false, error: 'unknown model: ' + key };
+  const p = modelPath(key);
+  if (!fs.existsSync(p)) return { ok: false, error: `model not downloaded: ${m.label}`, needDownload: true };
   const buf = fs.readFileSync(p);
-  // Transferable로 넘기기 위해 ArrayBuffer 반환 (Buffer.buffer는 pool이라 slice)
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-  return { ok: true, bytes: ab };
+  return { ok: true, bytes: ab, sources: m.sources, stems: m.stems };
 });
 
 // ── STEM: audio 추출 (ffmpeg → raw f32 stereo 44100Hz) ─
@@ -522,6 +668,7 @@ ipcMain.handle('library:register', (_ev, entry) => {
     stemPaths: entry.stemPaths || {},
     outDir: entry.outDir || '',
     sampleRate: entry.sampleRate || 44100,
+    modelKey: entry.modelKey || '4stem',
     createdAt: Date.now(),
     meta: entry.meta || {},
   };

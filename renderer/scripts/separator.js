@@ -10,6 +10,8 @@ const api = window.yssApi;
 let worker = null;
 let modelReady = false;
 let usedProvider = null; // 로드 완료 후 실제 사용된 provider
+let currentModelKey = null;
+let currentModelInfo = null;   // { sources, stems }
 
 /**
  * WebGPU 실제 사용 가능한지 확인.
@@ -81,9 +83,16 @@ async function initWorker() {
   });
 }
 
-async function loadModelWith(provider) {
-  const res = await api.stem.modelBytes();
-  if (!res.ok) throw new Error(res.error);
+async function loadModelWith(provider, modelKey) {
+  const res = await api.stem.modelBytes(modelKey);
+  if (!res.ok) {
+    const err = new Error(res.error);
+    err.needDownload = res.needDownload;
+    err.modelKey = modelKey;
+    throw err;
+  }
+  const sources = res.sources || 4;
+  currentModelInfo = { sources, stems: res.stems };
   await new Promise((resolve, reject) => {
     const onMsg = (e) => {
       const d = e.data;
@@ -93,19 +102,27 @@ async function loadModelWith(provider) {
     };
     worker.addEventListener('message', onMsg);
     worker.postMessage(
-      { type: 'LOAD_MODEL', modelBuffer: res.bytes, executionProvider: provider, sources: 4 },
+      { type: 'LOAD_MODEL', modelBuffer: res.bytes, executionProvider: provider, sources },
       [res.bytes]
     );
   });
+  currentModelKey = modelKey;
 }
 
-async function loadModel() {
-  if (modelReady) return;
+async function loadModel(modelKey) {
+  if (modelReady && currentModelKey === modelKey) return;
+  if (modelReady && currentModelKey !== modelKey) {
+    // 모델 전환 — 워커 리셋
+    try { worker.terminate(); } catch {}
+    worker = null; modelReady = false;
+    ensureWorker(); await initWorker();
+  }
   const provider = await pickProvider();
-  await loadModelWith(provider);
+  await loadModelWith(provider, modelKey);
 }
 
-const STEM_ORDER = ['drums', 'bass', 'other', 'vocals'];
+// 기본 STEM_ORDER — 실제 값은 현재 모델에 따라 동적
+let STEM_ORDER = ['drums', 'bass', 'other', 'vocals'];
 
 async function process(left, right, totalSamples, onProgress) {
   return await new Promise((resolve, reject) => {
@@ -149,16 +166,18 @@ function peakOf(arr) {
   return `peak=${p.toFixed(4)}${nan ? ` NaN_hits=${nan}` : ''}`;
 }
 
-export async function separatePipeline(videoPath, baseName, onStep) {
+export async function separatePipeline(videoPath, baseName, onStep, opts = {}) {
   resetCancelFlag();
   const throwIfCancel = () => { if (cancelRequested) throw new Error('취소됨'); };
+  const modelKey = opts.modelKey || '4stem';
   onStep?.('init', 0.02, '워커 초기화');
   ensureWorker();
   await initWorker();
   throwIfCancel();
 
-  onStep?.('model', 0.05, '모델 로드 (166MB)');
-  await loadModel();
+  onStep?.('model', 0.05, `${modelKey === '6stem' ? '6-stem' : '4-stem'} 모델 로드`);
+  await loadModel(modelKey);
+  STEM_ORDER = currentModelInfo?.stems || STEM_ORDER;
 
   onStep?.('extract', 0.10, '오디오 추출 (ffmpeg)');
   const ex = await api.stem.extractAudio(videoPath);
@@ -194,7 +213,7 @@ export async function separatePipeline(videoPath, baseName, onStep) {
     if (worker) { try { worker.terminate(); } catch {} worker = null; modelReady = false; }
     ensureWorker();
     await initWorker();
-    await loadModelWith('wasm');
+    await loadModelWith('wasm', modelKey);
     // 원본 left/right는 process()에서 transfer됨 → 다시 추출
     const ex2 = await api.stem.extractAudio(videoPath);
     if (!ex2.ok) throw new Error(ex2.error);

@@ -70,6 +70,87 @@ const providerStatus = $('provider-status');
     providerStatus.textContent = pref === 'auto' ? 'WebGPU 자동 사용' : (pref === 'webgpu' ? 'WebGPU 강제 사용' : 'CPU 강제 사용');
   }
 })();
+// ── 모델 선택 (4-stem / 6-stem) ────────────────
+const modelPills   = document.querySelectorAll('#model-pills .pill');
+const modelStatus  = $('model-status');
+const modelDlDialog= $('model-dl-dialog');
+const modelDlTitle = $('model-dl-title');
+const modelDlBody  = $('model-dl-body');
+const modelDlFill  = $('model-dl-fill');
+const modelDlInfo  = $('model-dl-info');
+const modelDlCancel= $('model-dl-cancel');
+
+let currentModelKey = localStorage.getItem('modelKey') || '4stem';
+let modelsInfo = {};
+
+modelPills.forEach(b => b.classList.toggle('on', b.dataset.model === currentModelKey));
+
+async function refreshModelStatus() {
+  try {
+    const res = await api.stem.models();
+    if (!res.ok) return;
+    modelsInfo = res.models;
+    updateModelStatusLabel();
+  } catch (e) { console.error(e); }
+}
+function updateModelStatusLabel() {
+  const info = modelsInfo[currentModelKey];
+  if (!info) { modelStatus.textContent = ''; return; }
+  if (info.downloaded) modelStatus.textContent = '준비됨';
+  else modelStatus.textContent = `첫 사용 시 ${(info.size/1024/1024).toFixed(0)}MB 다운로드`;
+}
+refreshModelStatus();
+
+modelPills.forEach(btn => {
+  btn.addEventListener('click', () => {
+    modelPills.forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    currentModelKey = btn.dataset.model;
+    localStorage.setItem('modelKey', currentModelKey);
+    updateModelStatusLabel();
+  });
+});
+
+let modelDlUnsub = null;
+async function ensureModelBeforeSeparation(modelKey) {
+  const info = modelsInfo[modelKey];
+  if (info && info.downloaded) return true;
+
+  modelDlTitle.textContent = `${modelKey === '6stem' ? '6-stem' : '4-stem'} 모델 다운로드`;
+  const mb = info ? (info.size / 1024 / 1024).toFixed(0) : '?';
+  modelDlBody.textContent = `첫 사용을 위해 모델 파일(약 ${mb}MB)을 다운로드합니다.\n인터넷 연결이 필요합니다.`;
+  modelDlFill.style.width = '0%';
+  modelDlInfo.textContent = '';
+  modelDlDialog.hidden = false;
+
+  modelDlUnsub?.();
+  modelDlUnsub = api.stem.onDownloadProgress((d) => {
+    if (d.key !== modelKey) return;
+    if (d.phase === 'progress' && d.total) {
+      const pct = Math.max(0, Math.min(100, Math.round(d.received / d.total * 100)));
+      modelDlFill.style.width = pct + '%';
+      const mbr = (d.received / 1024 / 1024).toFixed(1);
+      const mbt = (d.total    / 1024 / 1024).toFixed(1);
+      modelDlInfo.textContent = `${mbr} / ${mbt} MB (${pct}%)`;
+    }
+    if (d.phase === 'done') {
+      modelDlFill.style.width = '100%';
+      modelDlInfo.textContent = '완료';
+    }
+  });
+
+  const res = await api.stem.ensureModel(modelKey);
+  modelDlUnsub?.(); modelDlUnsub = null;
+  modelDlDialog.hidden = true;
+  if (!res.ok) throw new Error('모델 다운로드 실패: ' + res.error);
+  await refreshModelStatus();
+  return true;
+}
+modelDlCancel.addEventListener('click', async () => {
+  await api.stem.cancelDownload(currentModelKey);
+  modelDlDialog.hidden = true;
+});
+
 // Video quality selection
 const qualityPills = document.querySelectorAll('#quality-pills .pill');
 let currentQuality = localStorage.getItem('videoQuality') || '1080';
@@ -363,6 +444,7 @@ separateBtn.addEventListener('click', async () => {
 
   const t0 = performance.now();
   try {
+    await ensureModelBeforeSeparation(currentModelKey);
     const result = await separatePipeline(currentVideoPath, currentBaseName, (phase, ratio, detail) => {
       if (PHASE_LABELS_SEP[phase]) sepPhase.textContent = PHASE_LABELS_SEP[phase];
       if (typeof ratio === 'number') {
@@ -370,7 +452,7 @@ separateBtn.addEventListener('click', async () => {
         sepFill.style.width = pct + '%'; sepPct.textContent = pct + '%';
       }
       if (detail) sepInfo.textContent = detail;
-    });
+    }, { modelKey: currentModelKey });
     const dt = ((performance.now() - t0) / 1000).toFixed(1);
     const ep = getUsedProvider() || '?';
     sepInfo.textContent = `${dt}s 소요 · ${ep === 'webgpu' ? 'WebGPU' : 'CPU (WASM)'} 사용`;
@@ -391,6 +473,7 @@ separateBtn.addEventListener('click', async () => {
       stemPaths: result.stemPaths,
       outDir: result.outDir,
       sampleRate: result.sampleRate,
+      modelKey: currentModelKey,
       meta: {
         title: currentProbe?.title,
         uploader: currentProbe?.uploader,
