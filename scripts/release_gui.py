@@ -384,7 +384,13 @@ class ReleaseApp:
         # 5) 빌드
         self._log("→ electron-builder 빌드 (몇 분 소요)...")
         env = os.environ.copy()
-        env["CSC_IDENTITY_AUTO_DISCOVERY"] = "false"
+        cert_pfx = project / "build" / "cert.pfx"
+        if cert_pfx.exists():
+            env["CSC_LINK"] = str(cert_pfx)
+            env.setdefault("CSC_KEY_PASSWORD", "yt-separator-2026")
+            self._log(f"  자체 서명 인증서 사용: {cert_pfx.name}")
+        else:
+            env["CSC_IDENTITY_AUTO_DISCOVERY"] = "false"
         try:
             self._sh("npx electron-builder --win --publish never", cwd=project, env=env)
         except RuntimeError as e:

@@ -69,6 +69,10 @@
       ],
       "artifactName": "${productName}-${version}-${arch}-${target}.${ext}",
       "icon": "build/icon.png",
+      "signtoolOptions": {
+        "publisherName": ["Whale Mind"],
+        "signingHashAlgorithms": ["sha256"]
+      },
       "verifyUpdateCodeSignature": false
     },
     "nsis": {

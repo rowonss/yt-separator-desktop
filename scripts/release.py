@@ -234,7 +234,14 @@ def main():
     # 10. 빌드 (--publish never — 업로드는 스크립트가 직접 처리)
     log("electron-builder 빌드 (몇 분)...")
     env = os.environ.copy()
-    env["CSC_IDENTITY_AUTO_DISCOVERY"] = "false"
+    # 자체 서명 인증서가 있으면 자동 사용
+    cert_pfx = PROJECT_DIR / "build" / "cert.pfx"
+    if cert_pfx.exists():
+        env["CSC_LINK"] = str(cert_pfx)
+        env.setdefault("CSC_KEY_PASSWORD", "yt-separator-2026")
+        log(f"자체 서명 인증서 사용: {cert_pfx.name}")
+    else:
+        env["CSC_IDENTITY_AUTO_DISCOVERY"] = "false"
     try:
         sh("npx electron-builder --win --publish never", env=env)
     except subprocess.CalledProcessError:
