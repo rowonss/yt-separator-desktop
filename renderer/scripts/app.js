@@ -556,6 +556,12 @@ updBadge.addEventListener('click', showDialog);
 updDialog.addEventListener('click', (e) => { if (e.target === updDialog) hideDialog(); });
 
 updDownload.addEventListener('click', async () => {
+  const portableUrl = updDownload.dataset.portableUrl;
+  if (portableUrl) {
+    await api.openExternal(portableUrl);
+    hideDialog();
+    return;
+  }
   updDownload.hidden = true;
   updState = 'downloading';
   updProg.hidden = false;
@@ -589,6 +595,13 @@ api.update.onEvent((d) => {
       updDownload.hidden = false;
       updInstall.hidden = true;
       updProg.hidden = true;
+      if (d.portable && d.releaseUrl) {
+        updDownload.textContent = '다운로드 페이지 열기';
+        updDownload.dataset.portableUrl = d.releaseUrl;
+      } else {
+        updDownload.textContent = '다운로드';
+        delete updDownload.dataset.portableUrl;
+      }
       break;
     case 'not-available':
       updState = 'idle';
@@ -616,10 +629,6 @@ api.update.onEvent((d) => {
       if (updDialog.hidden === false) {
         updBody.textContent = '오류: ' + d.message;
       }
-      break;
-    case 'portable-hint':
-      // portable exe는 자동 업데이트 없음 — badge 안 띄움
-      console.log('[update] portable build, auto-update disabled');
       break;
   }
 });

@@ -180,12 +180,49 @@ autoUpdater.on('download-progress',   (p)    => sendUpdate({ type: 'progress', p
 autoUpdater.on('update-downloaded',   (info) => sendUpdate({ type: 'downloaded', version: info.version }));
 autoUpdater.on('error',               (err)  => sendUpdate({ type: 'error', message: err?.message || String(err) }));
 
+function isPortableBuild() {
+  // electron-builder Portable 타겟이 부여하는 env var. execPath는 임시폴더로 확장돼 부정확.
+  return !!process.env.PORTABLE_EXECUTABLE_FILE;
+}
+
+function cmpVer(a, b) {
+  const pa = String(a || '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
+async function checkForUpdatesPortable() {
+  try {
+    const res = await net.fetch(`https://api.github.com/repos/whalemindbass/yt-separator-desktop/releases/latest`, {
+      headers: { 'User-Agent': 'yt-separator-desktop', 'Accept': 'application/vnd.github+json' },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const rel = await res.json();
+    const latest  = (rel.tag_name || '').replace(/^v/, '');
+    const current = app.getVersion();
+    if (cmpVer(latest, current) > 0) {
+      sendUpdate({
+        type: 'available',
+        version: latest,
+        notes: rel.body || null,
+        portable: true,
+        releaseUrl: rel.html_url || `https://github.com/whalemindbass/yt-separator-desktop/releases/tag/${rel.tag_name}`,
+      });
+    } else {
+      sendUpdate({ type: 'not-available', version: current });
+    }
+  } catch (e) {
+    sendUpdate({ type: 'error', message: e.message });
+  }
+}
+
 function checkForUpdates() {
   if (isDev) { console.log('[updater] skip in dev'); return; }
-  // portable exe는 파일명 규칙으로 감지 — 자동 업데이트 대신 알림만
-  const exe = process.execPath || '';
-  if (/Portable/i.test(exe)) {
-    sendUpdate({ type: 'portable-hint' });
+  if (isPortableBuild()) {
+    checkForUpdatesPortable();
     return;
   }
   autoUpdater.checkForUpdates().catch((err) => sendUpdate({ type: 'error', message: err.message }));
