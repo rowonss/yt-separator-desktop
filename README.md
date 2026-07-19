@@ -11,12 +11,12 @@
 <p align="center">
   <a href="https://github.com/whalemindbass/yt-separator-desktop/releases/latest"><img src="https://img.shields.io/github/v/release/whalemindbass/yt-separator-desktop?label=latest" alt="Latest release" /></a>
   <a href="https://github.com/whalemindbass/yt-separator-desktop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0" /></a>
-  <a href="https://whalemindbass.github.io/yt-separator-desktop/"><img src="https://img.shields.io/badge/download-page-35d1a6" alt="Download" /></a>
+  <a href="https://ytseparator.com"><img src="https://img.shields.io/badge/download-page-35d1a6" alt="Download" /></a>
 </p>
 
 ## 설치
 
-**다운로드**: https://whalemindbass.github.io/yt-separator-desktop/
+**다운로드**: https://ytseparator.com
 
 - `Setup.exe` — NSIS 인스톨러. 자동 업데이트 지원 (권장).
 - `Portable.exe` — 단일 실행 파일. 업데이트 시 다운로드 페이지로 안내.
@@ -102,6 +102,6 @@ yt-separator-desktop/
 
 ## 링크
 
-- **다운로드**: https://whalemindbass.github.io/yt-separator-desktop/
+- **다운로드**: https://ytseparator.com
 - **모든 릴리즈**: https://github.com/whalemindbass/yt-separator-desktop/releases
 - **이슈 신고**: https://github.com/whalemindbass/yt-separator-desktop/issues
