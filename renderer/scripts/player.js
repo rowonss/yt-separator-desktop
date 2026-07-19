@@ -58,6 +58,30 @@ export async function loadStemFilesToBuffers(stemPaths) {
   }
 }
 
+/** Float32 stereo → 16-bit PCM WAV ArrayBuffer */
+function encodeWavAB(L, R, sr) {
+  const n = Math.min(L.length, R.length);
+  const dataBytes = n * 2 * 2;
+  const ab = new ArrayBuffer(44 + dataBytes);
+  const v = new DataView(ab);
+  const wr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  wr(0, 'RIFF'); v.setUint32(4, 36 + dataBytes, true);
+  wr(8, 'WAVE'); wr(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true);
+  v.setUint16(32, 4, true);  v.setUint16(34, 16, true);
+  wr(36, 'data'); v.setUint32(40, dataBytes, true);
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    const l = Math.max(-1, Math.min(1, L[i]));
+    const r = Math.max(-1, Math.min(1, R[i]));
+    v.setInt16(off, l < 0 ? l * 0x8000 : l * 0x7FFF, true);
+    v.setInt16(off + 2, r < 0 ? r * 0x8000 : r * 0x7FFF, true);
+    off += 4;
+  }
+  return ab;
+}
+
 export class Player {
   static _cache = new WeakMap();  // videoEl → { ctx, source }
 
@@ -66,12 +90,13 @@ export class Player {
    * @param {string} videoUrl file:// URL
    * @param {Record<string,[Float32Array,Float32Array]>} stems
    * @param {number} sampleRate
+   * @param {Record<string,string>} [stemUrls] — 각 stem의 ytsep URL. 제공되면 배속 시 피치 보존.
    */
-  constructor(videoEl, videoUrl, stems, sampleRate) {
+  constructor(videoEl, videoUrl, stems, sampleRate, stemUrls) {
     this.videoEl = videoEl;
-    // MediaElementAudioSource가 CORS로 무음 되는 것 방지 — src 세팅 전에 crossOrigin 지정
     if (!this.videoEl.crossOrigin) this.videoEl.crossOrigin = 'anonymous';
     this.videoEl.src = videoUrl;
+    this.videoEl.muted = false;
     this.videoEl.volume = 1;
 
     // MediaElementSource는 video 요소당 1회만 생성 가능 → ctx+source 캐시
@@ -114,39 +139,63 @@ export class Player {
     }
     this.origMixGain.connect(this.masterGain);
 
-    // 원본 Float32 (pitch shift 재처리용) 복사 저장
-    this.stemsOrig = {};
+    // 원본 Float32 (pitch shift 재처리용) 복사 저장 + 현재 재생중 pitched Float32
+    this.stemsOrig    = {};
+    this.stemsCurrent = {};
     for (const name of Object.keys(stems)) {
       if (!stems[name]) continue;
       const [L, R] = stems[name];
-      this.stemsOrig[name] = [new Float32Array(L), new Float32Array(R)];
+      this.stemsOrig[name]    = [new Float32Array(L), new Float32Array(R)];
+      this.stemsCurrent[name] = [new Float32Array(L), new Float32Array(R)];
     }
     this._currentKey = 0;
 
-    // 각 stem AudioBuffer + GainNode
+    // ── 스템 재생 백엔드 결정 ─────────────────────────
+    // stemUrls 제공 → HTMLAudioElement 기반 (preservesPitch = true, 배속 시 피치 유지)
+    // 없으면 AudioBufferSourceNode 폴백 (피치가 배속 따라 이동)
+    this.stemUrls    = stemUrls || null;
+    this.usePitchPreserve = !!this.stemUrls && Object.keys(this.stemUrls).length > 0;
+
+    this.stemAudios  = {};
     this.stemBuffers = {};
     this.stemGains   = {};
     this.stemVolumes = {};
     this.stemMuted   = {};
+    this._stemBlobUrls = {};
+
     for (const name of Object.keys(stems)) {
       const arr = stems[name];
       if (!arr) continue;
       const [L, R] = arr;
-      // stem 원본 SR로 buffer 생성 — playback 시 자동 리샘플
+
+      // stem 원본 SR로 buffer 생성 (export/pitch shift 용, 재생용은 아니지만 유지)
       const buf = this.audioCtx.createBuffer(2, L.length, sampleRate);
       buf.copyToChannel(L, 0);
       buf.copyToChannel(R, 1);
-      // Peak — 전체 스캔 (일부만 보면 drop-in silence 못 잡음)
-      let peak = 0;
-      const step = Math.max(1, Math.floor(L.length / 100000));
-      for (let i = 0; i < L.length; i += step) {
-        const av = Math.abs(L[i]);
-        if (av > peak) peak = av;
-      }
-      console.log(`[Player] stem "${name}" samples=${L.length} duration=${buf.duration.toFixed(2)}s peak=${peak.toFixed(3)} ctxSR=${this.audioCtx.sampleRate} bufSR=${buf.sampleRate}`);
       this.stemBuffers[name] = buf;
+
       const g = this.audioCtx.createGain();
       g.gain.value = 1.0;
+
+      if (this.usePitchPreserve) {
+        // <audio> 요소 + MediaElementSource
+        const audio = new Audio();
+        audio.crossOrigin = 'anonymous';
+        audio.preservesPitch = true;
+        audio.mozPreservesPitch = true;
+        audio.webkitPreservesPitch = true;
+        audio.preload = 'auto';
+        audio.src = this.stemUrls[name];
+        audio.load();
+        try {
+          const src = this.audioCtx.createMediaElementSource(audio);
+          src.connect(g);
+        } catch (e) {
+          console.warn(`[Player] MES failed for stem ${name}`, e.message);
+        }
+        this.stemAudios[name] = audio;
+      }
+
       g.connect(this.stemMixGain);
       this.stemGains[name] = g;
       this.stemVolumes[name] = 1.0;
@@ -190,12 +239,25 @@ export class Player {
     this._onEndedL  = () => { cancelStop(); this._stopAll(); this._playing = false; };
     this._onRateL   = () => {
       const r = v.playbackRate || 1;
-      for (const src of Object.values(this.sources)) {
-        try { src.playbackRate.setValueAtTime(r, this.audioCtx.currentTime); } catch {}
+      if (this.usePitchPreserve) {
+        for (const a of Object.values(this.stemAudios)) {
+          try { a.preservesPitch = true; a.playbackRate = r; } catch {}
+        }
+      } else {
+        for (const src of Object.values(this.sources)) {
+          try { src.playbackRate.setValueAtTime(r, this.audioCtx.currentTime); } catch {}
+        }
       }
     };
     this._onVolL = () => {
-      if (!v.muted || v.volume > 0) { v.muted = true; v.volume = 0; }
+      if (this.videoSource) {
+        // MES 경유 라우팅 — video 자체는 반드시 unmuted 여야 원본 오디오가 그래프로 들어옴.
+        // controls의 mute/volume 조작은 되돌림 (실제 볼륨은 origMixGain으로 제어)
+        if (v.muted || v.volume < 1) { v.muted = false; v.volume = 1; }
+      } else {
+        // MES 실패 시 → 그래프로 못 잡음 → 안전하게 mute (double audio 방지)
+        if (!v.muted || v.volume > 0) { v.muted = true; v.volume = 0; }
+      }
     };
     v.addEventListener('play',         this._onPlayL);
     v.addEventListener('pause',        this._onPauseL);
@@ -240,6 +302,22 @@ export class Player {
 
   _startAll(offset) {
     const rate = this.videoEl.playbackRate || 1;
+    if (this.usePitchPreserve) {
+      // HTMLAudioElement 모드 — 배속 시 피치 유지
+      let started = 0;
+      for (const [name, audio] of Object.entries(this.stemAudios)) {
+        try {
+          audio.preservesPitch = true;
+          audio.playbackRate = rate;
+          audio.currentTime = Math.max(0, offset || 0);
+          audio.play().catch(err => console.warn('[Player] audio.play', name, err.message));
+          started++;
+        } catch (e) { console.error('[Player] audio start failed', name, e); }
+      }
+      console.log(`[Player] started ${started} audio elements @ ${offset.toFixed(3)}s rate=${rate}`);
+      return;
+    }
+    // BufferSource 폴백
     let started = 0;
     for (const [name, buf] of Object.entries(this.stemBuffers)) {
       const src = this.audioCtx.createBufferSource();
@@ -251,11 +329,16 @@ export class Player {
       catch (e) { console.error('[Player] source start failed', name, e); }
       this.sources[name] = src;
     }
-    console.log('[Player] started sources:', started, 'offset:', offset,
-                'masterGain:', this.masterGain.gain.value);
+    console.log('[Player] started sources:', started, 'offset:', offset);
   }
 
   _stopAll() {
+    if (this.usePitchPreserve) {
+      for (const audio of Object.values(this.stemAudios)) {
+        try { audio.pause(); } catch {}
+      }
+      return;
+    }
     for (const src of Object.values(this.sources)) {
       try { src.stop(); } catch {}
     }
@@ -316,16 +399,32 @@ export class Player {
       }
     }
 
-    // buffer 교체 (재생 중이면 잠시 정지 → 재시작)
+    // 재생 중이면 잠시 정지 → 재시작
     const wasPlaying = this._playing;
     const seekTo = this.videoEl.currentTime;
     if (wasPlaying) this._stopAll();
+
     const sr = this._sampleRate;
     for (const [n, [L, R]] of Object.entries(newStems)) {
+      // stemsCurrent 갱신 (export 등에 사용)
+      this.stemsCurrent[n] = [new Float32Array(L), new Float32Array(R)];
+      // AudioBuffer 갱신 (BufferSource 폴백 시 사용)
       const buf = this.audioCtx.createBuffer(2, L.length, sr);
-      buf.copyToChannel(new Float32Array(L), 0);
-      buf.copyToChannel(new Float32Array(R), 1);
+      buf.copyToChannel(this.stemsCurrent[n][0], 0);
+      buf.copyToChannel(this.stemsCurrent[n][1], 1);
       this.stemBuffers[n] = buf;
+
+      // HTMLAudioElement 모드: WAV blob 인코딩 후 src 교체
+      if (this.usePitchPreserve && this.stemAudios[n]) {
+        const wavAB = encodeWavAB(this.stemsCurrent[n][0], this.stemsCurrent[n][1], sr);
+        const blob  = new Blob([wavAB], { type: 'audio/wav' });
+        const url   = URL.createObjectURL(blob);
+        if (this._stemBlobUrls[n]) { try { URL.revokeObjectURL(this._stemBlobUrls[n]); } catch {} }
+        this._stemBlobUrls[n] = url;
+        const a = this.stemAudios[n];
+        a.src = url;
+        a.load();
+      }
     }
     this._currentKey = semitones;
     if (wasPlaying) {
@@ -368,17 +467,13 @@ export class Player {
     console.log(`[Player] direct stem test scheduled, buf.duration=${buf.duration.toFixed(2)}s buf.sampleRate=${buf.sampleRate} ctx.sampleRate=${this.audioCtx.sampleRate}`);
   }
 
-  /** 현재 재생용 stem buffer들을 Float32 [L,R]로 반환 (내보내기용) */
+  /** 현재 stemsCurrent (pitched 반영) Float32 [L,R]로 반환 (내보내기용) */
   getStemsForExport() {
     const out = {};
-    let sr = this._sampleRate;
-    for (const [name, buf] of Object.entries(this.stemBuffers)) {
-      const L = new Float32Array(buf.getChannelData(0));
-      const R = new Float32Array(buf.numberOfChannels > 1 ? buf.getChannelData(1) : buf.getChannelData(0));
-      out[name] = [L, R];
-      sr = buf.sampleRate;
+    for (const [name, [L, R]] of Object.entries(this.stemsCurrent)) {
+      out[name] = [new Float32Array(L), new Float32Array(R)];
     }
-    return { stems: out, sampleRate: sr };
+    return { stems: out, sampleRate: this._sampleRate };
   }
 
   /** 현재 mixer 상태(볼륨/뮤트) 기반 가중치 반환 */
@@ -424,6 +519,14 @@ export class Player {
   destroy() {
     this._stopAll();
     this._unbindVideoEvents();
+    // stem audio 요소 정리
+    for (const a of Object.values(this.stemAudios || {})) {
+      try { a.pause(); a.removeAttribute('src'); a.load(); } catch {}
+    }
+    // blob URL 회수
+    for (const u of Object.values(this._stemBlobUrls || {})) {
+      try { URL.revokeObjectURL(u); } catch {}
+    }
     // ctx는 재사용하기 위해 close하지 않음 (MediaElementSource 재바인딩 방지)
     try { this.stemMixGain?.disconnect(); } catch {}
     try { this.origMixGain?.disconnect(); } catch {}

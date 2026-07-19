@@ -188,7 +188,12 @@ async function mountPlayer(item) {
   try {
     const { stems, sampleRate } = await loadStemFilesToBuffers(item.stemPaths);
     const videoUrl = toYtsepUrl(item.videoPath);
-    currentPlayer = new Player(playerVideo, videoUrl, stems, sampleRate);
+    // 각 stem의 ytsep URL — HTMLAudioElement로 스트리밍 (배속 시 피치 보존)
+    const stemUrls = {};
+    for (const [name, p] of Object.entries(item.stemPaths || {})) {
+      stemUrls[name] = toYtsepUrl(p);
+    }
+    currentPlayer = new Player(playerVideo, videoUrl, stems, sampleRate, stemUrls);
 
     // 믹서 트랙
     for (const name of stemOrderFor(item.modelKey || '4stem')) {
@@ -228,9 +233,10 @@ async function mountPlayer(item) {
       });
     });
 
-    // master / source / key / group / reseparate 초기화
+    // master / source / speed / key / group / reseparate 초기화
     masterVol.value = 100; masterVal.textContent = '100%';
     resetSourceToggle();
+    resetSpeedUI();
     resetKeyUI();
     updateGroupPickerLabel();
     updateReseparateAndToggle(item);
@@ -311,6 +317,28 @@ reseparateBtn?.addEventListener('click', () => {
     },
   }));
 });
+
+// ── 재생 속도 (5% 단위, 50% ~ 200%) ────────────────
+const speedSlider = $('speed-slider');
+const speedVal    = $('speed-val');
+const speedDown   = $('speed-down');
+const speedUp     = $('speed-up');
+const speedReset  = $('speed-reset');
+
+function applySpeed(pct) {
+  pct = Math.max(50, Math.min(200, Math.round(pct / 5) * 5));   // 5% 스냅
+  speedSlider.value = pct;
+  speedVal.textContent = pct + '%';
+  if (playerVideo) {
+    // ratechange 이벤트 → Player가 stem audio들을 자동 sync
+    playerVideo.playbackRate = pct / 100;
+  }
+}
+function resetSpeedUI() { applySpeed(100); }
+speedSlider?.addEventListener('input', () => applySpeed(Number(speedSlider.value)));
+speedDown  ?.addEventListener('click', () => applySpeed(Number(speedSlider.value) - 5));
+speedUp    ?.addEventListener('click', () => applySpeed(Number(speedSlider.value) + 5));
+speedReset ?.addEventListener('click', () => applySpeed(100));
 
 // ── 오디오 소스 토글 (스템 / 원본) ────────────────
 const srcToggle = $('source-toggle');

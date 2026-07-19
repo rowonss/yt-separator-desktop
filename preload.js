@@ -30,6 +30,18 @@ contextBridge.exposeInMainWorld('yssApi', {
     read: () => ipcRenderer.invoke('clipboard:read'),
   },
 
+  // 설정
+  settings: {
+    get:              ()          => ipcRenderer.invoke('settings:get'),
+    set:              (obj)       => ipcRenderer.invoke('settings:set', obj),
+    downloadsDir:     ()          => ipcRenderer.invoke('settings:downloadsDir'),
+    pickDownloadsDir: ()          => ipcRenderer.invoke('settings:pickDownloadsDir'),
+    calcDiskUsage:    ()          => ipcRenderer.invoke('settings:calcDiskUsage'),
+    deleteModel:      (key)       => ipcRenderer.invoke('settings:deleteModel', key),
+    appInfo:          ()          => ipcRenderer.invoke('settings:appInfo'),
+    openUserData:     ()          => ipcRenderer.invoke('settings:openUserData'),
+  },
+
   // 로컬 파일/폴더 선택 · 저장
   dialog: {
     pickMedia:  ()               => ipcRenderer.invoke('dialog:pickMedia'),

@@ -617,6 +617,135 @@ body { display: flex; flex-direction: column; }
   word-break: break-word;
 }
 
+/* Settings view */
+.settings-body {
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 32px 32px 60px;
+  display: flex; flex-direction: column;
+  gap: 24px;
+  overflow-y: auto;
+}
+.settings-hero h2 {
+  font-size: 22px; font-weight: 700;
+  letter-spacing: -.015em;
+  margin-bottom: 4px;
+}
+.settings-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 4px 20px;
+}
+.settings-section h3 {
+  font-family: var(--mono);
+  font-size: 10.5px; font-weight: 700;
+  color: var(--tx-3);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 14px 0 8px;
+}
+.settings-item {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.settings-section .settings-item:first-of-type { border-top: 0; }
+.settings-item-vertical {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.settings-label-col {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.settings-item-title {
+  font-size: 13.5px; font-weight: 600;
+  color: var(--tx-1);
+}
+.settings-item-desc {
+  font-size: 12px;
+  color: var(--tx-3);
+  word-break: break-all;
+}
+.settings-actions {
+  display: flex; gap: 8px;
+  flex-shrink: 0;
+}
+.settings-actions .btn { padding: 7px 14px; font-size: 12.5px; }
+
+/* Switch (checkbox toggle) */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px; height: 22px;
+  flex-shrink: 0;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span {
+  position: absolute; inset: 0;
+  background: var(--input);
+  border-radius: 22px;
+  transition: background .18s;
+  cursor: pointer;
+}
+.switch span::before {
+  content: '';
+  position: absolute;
+  left: 3px; top: 3px;
+  width: 16px; height: 16px;
+  background: var(--tx-2);
+  border-radius: 50%;
+  transition: transform .18s, background .18s;
+}
+.switch input:checked + span {
+  background: var(--accent);
+}
+.switch input:checked + span::before {
+  transform: translateX(18px);
+  background: var(--accent-fg);
+}
+
+/* 모델 리스트 */
+.settings-models { display: flex; flex-direction: column; gap: 8px; }
+.settings-model {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px;
+  background: var(--elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.settings-model-info { flex: 1; min-width: 0; }
+.settings-model-name {
+  font-size: 13px; font-weight: 600;
+  color: var(--tx-1);
+}
+.settings-model-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--tx-3);
+  margin-top: 2px;
+}
+.settings-model-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.settings-model-status.on {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.settings-model-status.off {
+  background: var(--input);
+  color: var(--tx-3);
+}
+.settings-model .settings-actions .btn { padding: 5px 10px; font-size: 11.5px; }
+
 /* Library layout — full width 3-column responsive */
 .library-body {
   max-width: none;
@@ -860,6 +989,33 @@ body { display: flex; flex-direction: column; }
   background: var(--accent);
   color: var(--accent-fg);
   font-weight: 700;
+}
+
+/* Speed controls */
+.speed-controls { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.speed-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 150px;
+  height: 4px;
+  background: var(--input);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.speed-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 0;
+}
+.speed-val {
+  font-size: 12.5px; font-weight: 600;
+  color: var(--tx-1);
+  min-width: 44px; text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Key controls */

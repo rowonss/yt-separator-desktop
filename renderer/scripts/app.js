@@ -51,6 +51,201 @@ function switchView(name) {
 }
 tabs.forEach(t => t.addEventListener('click', () => switchView(t.dataset.view)));
 
+// ── 설정 뷰 ──────────────────────────────────────
+function fmtBytes2(n) {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0, v = n || 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v < 10 ? 2 : (v < 100 ? 1 : 0)) + ' ' + u[i];
+}
+
+const sModelPills    = document.querySelectorAll('#s-model-pills .pill');
+const sProviderPills = document.querySelectorAll('#s-provider-pills .pill');
+const sQualityPills  = document.querySelectorAll('#s-quality-pills .pill');
+const sClipboardCB   = $('s-clipboard-detect');
+const sDownloadsDir  = $('s-downloads-dir');
+const sDownloadsOpen = $('s-downloads-open');
+const sDownloadsChg  = $('s-downloads-change');
+const sDiskUsage     = $('s-disk-usage');
+const sDiskRefresh   = $('s-disk-refresh');
+const sCleanup       = $('s-cleanup');
+const sModels        = $('s-models');
+const sAutoUpdateCB  = $('s-auto-update');
+const sCheckUpdate   = $('s-check-update');
+const sUpdateStatus  = $('s-update-status');
+const sAppInfo       = $('s-app-info');
+const sReleaseNotes  = $('s-release-notes');
+
+async function refreshSettingsView() {
+  // 모델 pill sync (localStorage와 통일)
+  const modelKey = localStorage.getItem('modelKey') || '4stem';
+  sModelPills.forEach(b => b.classList.toggle('on', b.dataset.model === modelKey));
+
+  const provider = localStorage.getItem('executionProvider') || 'auto';
+  sProviderPills.forEach(b => b.classList.toggle('on', b.dataset.provider === provider));
+
+  const quality = localStorage.getItem('videoQuality') || '1080';
+  sQualityPills.forEach(b => b.classList.toggle('on', b.dataset.quality === quality));
+
+  sClipboardCB.checked = localStorage.getItem('clipboardAutoDetect') !== '0';
+
+  // Main-side settings
+  try {
+    const s = await api.settings.get();
+    sAutoUpdateCB.checked = s.autoUpdateEnabled !== false;
+  } catch {}
+
+  // Downloads dir
+  try {
+    const dir = await api.settings.downloadsDir();
+    sDownloadsDir.textContent = dir;
+  } catch (e) { sDownloadsDir.textContent = '오류: ' + e.message; }
+
+  // Disk usage
+  refreshDiskUsage();
+
+  // Models list
+  refreshModelsList();
+
+  // App info
+  try {
+    const info = await api.settings.appInfo();
+    sAppInfo.textContent = `v${info.appVersion} · Electron ${info.electronVersion} · Chromium ${info.chromeVersion} · Node ${info.nodeVersion}`;
+    sUpdateStatus.textContent = `현재 버전 v${info.appVersion}`;
+  } catch {}
+}
+
+async function refreshDiskUsage() {
+  sDiskUsage.textContent = '계산 중…';
+  try {
+    const u = await api.settings.calcDiskUsage();
+    sDiskUsage.textContent = `총 ${fmtBytes2(u.total)} (다운로드 ${fmtBytes2(u.downloads)} + 모델 ${fmtBytes2(u.models)})`;
+  } catch (e) { sDiskUsage.textContent = '오류'; }
+}
+
+async function refreshModelsList() {
+  sModels.innerHTML = '';
+  try {
+    const res = await api.stem.models();
+    if (!res.ok) return;
+    for (const [key, m] of Object.entries(res.models)) {
+      const row = document.createElement('div');
+      row.className = 'settings-model';
+      row.innerHTML = `
+        <div class="settings-model-info">
+          <div class="settings-model-name">${m.label}</div>
+          <div class="settings-model-meta">${fmtBytes2(m.size)}</div>
+        </div>
+        <span class="settings-model-status ${m.downloaded ? 'on' : 'off'}">${m.downloaded ? '다운로드됨' : '미다운로드'}</span>
+        <div class="settings-actions">
+          ${m.downloaded
+            ? `<button class="btn" data-act="delete" data-key="${key}">삭제</button>`
+            : `<button class="btn" data-act="download" data-key="${key}">지금 다운로드</button>`}
+        </div>
+      `;
+      sModels.appendChild(row);
+    }
+  } catch (e) { console.error(e); }
+}
+
+sModels?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const key = btn.dataset.key;
+  const act = btn.dataset.act;
+  if (act === 'delete') {
+    if (!confirm('이 모델을 삭제할까요? 다음 사용 시 다시 다운로드됩니다.')) return;
+    await api.settings.deleteModel(key);
+    await refreshModelsList();
+    await refreshDiskUsage();
+  } else if (act === 'download') {
+    try {
+      await ensureModelBeforeSeparation(key);
+      await refreshModelsList();
+      await refreshDiskUsage();
+    } catch (e) { alert('다운로드 실패: ' + e.message); }
+  }
+});
+
+sModelPills.forEach(btn => btn.addEventListener('click', () => {
+  sModelPills.forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  localStorage.setItem('modelKey', btn.dataset.model);
+  currentModelKey = btn.dataset.model;
+  modelPills.forEach(b => b.classList.toggle('on', b.dataset.model === currentModelKey));
+  updateModelStatusLabel();
+}));
+sProviderPills.forEach(btn => btn.addEventListener('click', () => {
+  sProviderPills.forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  setProviderPreference(btn.dataset.provider);
+  providerPills.forEach(b => b.classList.toggle('on', b.dataset.provider === btn.dataset.provider));
+}));
+sQualityPills.forEach(btn => btn.addEventListener('click', () => {
+  sQualityPills.forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  currentQuality = btn.dataset.quality;
+  localStorage.setItem('videoQuality', currentQuality);
+  qualityPills.forEach(b => b.classList.toggle('on', b.dataset.quality === currentQuality));
+}));
+sClipboardCB?.addEventListener('change', () => {
+  localStorage.setItem('clipboardAutoDetect', sClipboardCB.checked ? '1' : '0');
+});
+sAutoUpdateCB?.addEventListener('change', async () => {
+  await api.settings.set({ autoUpdateEnabled: sAutoUpdateCB.checked });
+});
+sDownloadsOpen?.addEventListener('click', async () => {
+  const dir = await api.settings.downloadsDir();
+  await api.openPath(dir);
+});
+sDownloadsChg?.addEventListener('click', async () => {
+  const res = await api.settings.pickDownloadsDir();
+  if (res.ok) {
+    sDownloadsDir.textContent = res.dir;
+    refreshDiskUsage();
+  }
+});
+sDiskRefresh?.addEventListener('click', refreshDiskUsage);
+sCleanup?.addEventListener('click', async () => {
+  await Library.refresh();
+  const dupRes = await api.library.cleanup();
+  const preview = await api.library.previewOrphans();
+  const orphans = [...(preview.videos || []), ...(preview.stems || [])];
+  const dupMsg = dupRes.removed > 0
+    ? `중복 ${dupRes.removed}개 통합됨.`
+    : '중복 없음.';
+  if (!orphans.length) {
+    alert(`${dupMsg}\n라이브러리에 없는 파일도 없음 — 깨끗함.`);
+    refreshDiskUsage(); return;
+  }
+  const totalMb = (orphans.reduce((s,x)=>s+x.size,0)/1024/1024).toFixed(1);
+  if (confirm(`${dupMsg}\n라이브러리에 없는 파일 ${orphans.length}개 (${totalMb} MB)를 삭제할까요?`)) {
+    for (const o of orphans) await api.library.deleteOrphan(o.path);
+    alert('정리 완료');
+  }
+  refreshDiskUsage();
+});
+sCheckUpdate?.addEventListener('click', () => {
+  sUpdateStatus.textContent = '확인 중…';
+  api.update.check();
+});
+sReleaseNotes?.addEventListener('click', () => {
+  api.openExternal('https://github.com/whalemindbass/yt-separator-desktop/releases');
+});
+
+// 설정 뷰 진입 시 상태 갱신
+const _origSwitchView = switchView;
+switchView = function(name) {
+  _origSwitchView(name);
+  if (name === 'settings') refreshSettingsView();
+};
+
+// 클립보드 감지 토글 반영 (기본 감지 로직에 체크 추가)
+const _origTryPaste = tryPasteFromClipboard;
+tryPasteFromClipboard = async function() {
+  if (localStorage.getItem('clipboardAutoDetect') === '0') return;
+  return _origTryPaste();
+};
+
 // ── 처리 장치 (Provider) 선택 ──────────────────
 const providerPills = document.querySelectorAll('#provider-pills .pill');
 const providerStatus = $('provider-status');

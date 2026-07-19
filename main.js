@@ -55,10 +55,25 @@ const YTDLP_BIN  = vendorPath('yt-dlp', 'yt-dlp.exe');
 const FFMPEG_BIN = vendorPath('ffmpeg', 'ffmpeg.exe');
 const FFMPEG_DIR = vendorPath('ffmpeg');
 
-/** userData/downloads — 사용자별 다운로드 저장 위치 */
+// ── 사용자 설정 (userData/settings.json) ────────────────
+function settingsFile() { return path.join(app.getPath('userData'), 'settings.json'); }
+function readSettings() {
+  try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf-8')); }
+  catch { return {}; }
+}
+function writeSettings(obj) {
+  try { fs.writeFileSync(settingsFile(), JSON.stringify(obj, null, 2), 'utf-8'); return true; }
+  catch { return false; }
+}
+
+/** userData/downloads (기본) — 사용자가 설정에서 변경했으면 커스텀 경로 */
 function downloadsDir() {
-  const dir = path.join(app.getPath('userData'), 'downloads');
-  fs.mkdirSync(dir, { recursive: true });
+  const s = readSettings();
+  let dir = s.downloadsDir;
+  if (!dir || typeof dir !== 'string') {
+    dir = path.join(app.getPath('userData'), 'downloads');
+  }
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
   return dir;
 }
 
@@ -157,8 +172,12 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
   });
-  // 앱이 뜨고 3초 뒤 업데이트 조회 (portable/dev에서는 no-op)
-  setTimeout(() => { checkForUpdates(); }, 3000);
+  // 앱이 뜨고 3초 뒤 업데이트 조회 (사용자가 disable 했으면 skip)
+  setTimeout(() => {
+    const s = readSettings();
+    if (s.autoUpdateEnabled === false) return;
+    checkForUpdates();
+  }, 3000);
 });
 
 // ── Auto-updater ────────────────────────────────────────
@@ -239,6 +258,67 @@ ipcMain.handle('window:maxToggle',  () => {
 ipcMain.handle('window:close',      () => { mainWindow?.close(); });
 ipcMain.handle('window:isMaximized',() => !!mainWindow?.isMaximized());
 ipcMain.handle('clipboard:read',    () => clipboard.readText() || '');
+
+// ── 설정 IPC ─────────────────────────────────────────
+ipcMain.handle('settings:get', () => readSettings());
+ipcMain.handle('settings:set', (_ev, obj) => {
+  const cur = readSettings();
+  const merged = { ...cur, ...obj };
+  return { ok: writeSettings(merged), settings: merged };
+});
+ipcMain.handle('settings:pickDownloadsDir', async () => {
+  const res = await dialog.showOpenDialog(mainWindow || null, {
+    title: '다운로드 폴더 선택',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: downloadsDir(),
+  });
+  if (res.canceled || !res.filePaths?.length) return { ok: false, canceled: true };
+  const dir = res.filePaths[0];
+  const merged = { ...readSettings(), downloadsDir: dir };
+  writeSettings(merged);
+  return { ok: true, dir };
+});
+ipcMain.handle('settings:downloadsDir', () => downloadsDir());
+ipcMain.handle('settings:calcDiskUsage', () => {
+  const dlDir  = downloadsDir();
+  const modDir = path.join(app.getPath('userData'), 'models');
+  let total = 0, downloads = 0, models = 0;
+  const walk = (dir) => {
+    let sum = 0;
+    if (!fs.existsSync(dir)) return sum;
+    try {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) sum += walk(p);
+        else { try { sum += fs.statSync(p).size; } catch {} }
+      }
+    } catch {}
+    return sum;
+  };
+  downloads = walk(dlDir);
+  models = walk(modDir);
+  total = downloads + models;
+  return { downloads, models, total, downloadsDir: dlDir, modelsDir: modDir };
+});
+ipcMain.handle('settings:deleteModel', (_ev, key) => {
+  const m = MODELS[key];
+  if (!m) return { ok: false, error: 'unknown model: ' + key };
+  const p = path.join(app.getPath('userData'), 'models', m.file);
+  try { if (fs.existsSync(p)) fs.rmSync(p, { force: true }); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('settings:appInfo', () => ({
+  appVersion:      app.getVersion(),
+  electronVersion: process.versions.electron,
+  chromeVersion:   process.versions.chrome,
+  nodeVersion:     process.versions.node,
+  platform:        process.platform,
+  arch:            process.arch,
+}));
+ipcMain.handle('settings:openUserData', async () => {
+  await shell.openPath(app.getPath('userData'));
+  return true;
+});
 ipcMain.handle('dialog:saveAs', async (_ev, defaultName, exts) => {
   const filters = [{ name: 'WAV', extensions: exts || ['wav'] }];
   const res = await dialog.showSaveDialog(mainWindow || null, {

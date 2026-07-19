@@ -22,6 +22,7 @@
     <nav class="tabs">
       <button class="tab on" data-view="separate">새 분리</button>
       <button class="tab" data-view="library">라이브러리</button>
+      <button class="tab" data-view="settings">설정</button>
     </nav>
     <div class="titlebar-meta">
       <button id="theme-toggle" class="icon-btn" title="테마 전환">
@@ -272,6 +273,17 @@
             <button class="source-btn"    data-src="orig">원본</button>
           </div>
         </div>
+        <div class="mixer-master mixer-master-inline">
+          <label class="mixer-label">속도</label>
+          <div class="speed-controls">
+            <button id="speed-down" class="key-btn" title="-5%">−</button>
+            <input id="speed-slider" class="speed-slider" type="range" min="50" max="200" step="5" value="100" />
+            <button id="speed-up"   class="key-btn" title="+5%">+</button>
+            <span   id="speed-val" class="speed-val">100%</span>
+            <button id="speed-reset" class="link-btn" title="1x로 초기화">×1</button>
+          </div>
+        </div>
+
         <div class="mixer-master mixer-key mixer-master-inline">
           <label class="mixer-label">키</label>
           <div class="key-controls">
@@ -287,6 +299,138 @@
         <div class="mixer-tracks" id="mixer-tracks"><!-- rendered by app.js --></div>
       </div>
     </aside>
+  </main>
+
+  <!-- View 3: 설정 -->
+  <main class="body view settings-body" data-view="settings" hidden>
+    <div class="settings-hero">
+      <h2>설정</h2>
+      <p class="muted">앱 동작 방식을 조정할 수 있습니다.</p>
+    </div>
+
+    <section class="settings-section">
+      <h3>스템 분리</h3>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">기본 모델</div>
+          <div class="settings-item-desc">"새 분리" 뷰의 초기 모델</div>
+        </div>
+        <div class="pill-row" id="s-model-pills">
+          <button class="pill" data-model="4stem">4-stem</button>
+          <button class="pill" data-model="6stem">6-stem</button>
+        </div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">기본 처리 장치</div>
+          <div class="settings-item-desc">자동 = WebGPU 지원 시 GPU, 아니면 CPU</div>
+        </div>
+        <div class="pill-row" id="s-provider-pills">
+          <button class="pill" data-provider="auto">자동</button>
+          <button class="pill" data-provider="webgpu">GPU</button>
+          <button class="pill" data-provider="wasm">CPU</button>
+        </div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">기본 영상 화질</div>
+          <div class="settings-item-desc">낮을수록 다운로드 · 처리 시간 단축</div>
+        </div>
+        <div class="pill-row" id="s-quality-pills">
+          <button class="pill" data-quality="2160">2160p</button>
+          <button class="pill" data-quality="1440">1440p</button>
+          <button class="pill" data-quality="1080">1080p</button>
+          <button class="pill" data-quality="720">720p</button>
+          <button class="pill" data-quality="480">480p</button>
+          <button class="pill" data-quality="360">360p</button>
+        </div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">클립보드 자동 감지</div>
+          <div class="settings-item-desc">앱 창 활성화 시 클립보드의 YouTube 링크 자동 입력</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="s-clipboard-detect" /><span></span></label>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3>파일 · 저장소</h3>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">다운로드 폴더</div>
+          <div class="settings-item-desc" id="s-downloads-dir">…</div>
+        </div>
+        <div class="settings-actions">
+          <button id="s-downloads-open" class="btn">열기</button>
+          <button id="s-downloads-change" class="btn">변경…</button>
+        </div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">사용 용량</div>
+          <div class="settings-item-desc" id="s-disk-usage">…</div>
+        </div>
+        <div class="settings-actions">
+          <button id="s-disk-refresh" class="btn">새로고침</button>
+        </div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">라이브러리 정리</div>
+          <div class="settings-item-desc">중복 통합 · 라이브러리에 없는 파일 확인</div>
+        </div>
+        <div class="settings-actions">
+          <button id="s-cleanup" class="btn">정리 실행</button>
+        </div>
+      </div>
+      <div class="settings-item settings-item-vertical">
+        <div class="settings-label-col">
+          <div class="settings-item-title">모델</div>
+          <div class="settings-item-desc">필요할 때 자동 다운로드됩니다. 사용 안 하면 삭제로 용량 확보</div>
+        </div>
+        <div class="settings-models" id="s-models"><!-- rendered by app.js --></div>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3>업데이트</h3>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">자동 확인</div>
+          <div class="settings-item-desc">앱 시작 시 새 버전이 있는지 확인</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="s-auto-update" /><span></span></label>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">지금 확인</div>
+          <div class="settings-item-desc" id="s-update-status">현재 버전 v?</div>
+        </div>
+        <div class="settings-actions">
+          <button id="s-check-update" class="btn">확인</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3>정보</h3>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">버전</div>
+          <div class="settings-item-desc" id="s-app-info">…</div>
+        </div>
+      </div>
+      <div class="settings-item">
+        <div class="settings-label-col">
+          <div class="settings-item-title">릴리즈 노트</div>
+          <div class="settings-item-desc">모든 버전의 변경 내역</div>
+        </div>
+        <div class="settings-actions">
+          <button id="s-release-notes" class="btn">GitHub 열기</button>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script type="module" src="./scripts/app.js"></script>
