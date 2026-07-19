@@ -10,6 +10,39 @@ import { Library } from './library.js';
 const $ = (id) => document.getElementById(id);
 const api = window.yssApi;
 
+/** GitHub 릴리즈 노트의 마크다운을 간단 HTML로 렌더. XSS 방지 위해 HTML 이스케이프 먼저. */
+function mdToHtml(md) {
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let out = esc(md);
+  const lines = out.split('\n');
+  const rendered = [];
+  let listBuf = [];
+  const flushList = () => {
+    if (listBuf.length) {
+      rendered.push('<ul>' + listBuf.map(l => '<li>' + l + '</li>').join('') + '</ul>');
+      listBuf = [];
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^###\s+/.test(line))      { flushList(); rendered.push('<h3>' + line.replace(/^###\s+/, '') + '</h3>'); continue; }
+    if (/^##\s+/.test(line))       { flushList(); rendered.push('<h2>' + line.replace(/^##\s+/, '')  + '</h2>'); continue; }
+    if (/^#\s+/.test(line))        { flushList(); rendered.push('<h1>' + line.replace(/^#\s+/, '')   + '</h1>'); continue; }
+    if (/^[-*]\s+/.test(line))     { listBuf.push(line.replace(/^[-*]\s+/, '')); continue; }
+    if (/^\d+\.\s+/.test(line))    { listBuf.push(line.replace(/^\d+\.\s+/, '')); continue; }
+    flushList();
+    if (line === '') { rendered.push(''); continue; }
+    rendered.push('<p>' + line + '</p>');
+  }
+  flushList();
+  let html = rendered.join('\n');
+  // 인라인
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/`([^`]+?)`/g, '<code>$1</code>');
+  html = html.replace(/\[([^\]]+?)\]\((https?:[^)]+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return html;
+}
+
 // ── 앱 메타 표시 ───────────────────────────────
 (async () => {
   try {
@@ -779,11 +812,10 @@ api.update.onEvent((d) => {
       updBadge.textContent = `v${d.version} 사용 가능`;
       updBadge.hidden = false;
       updTitle.textContent = `새 버전 v${d.version} 있음`;
-      // GitHub 릴리즈 노트는 마크다운→HTML로 변환되어 옴. 태그를 렌더링해 표시.
+      // 릴리즈 노트 렌더링 — HTML이면 그대로, 마크다운이면 간단 변환
       if (typeof d.notes === 'string' && d.notes) {
         const looksHtml = /<[a-z][\s\S]*>/i.test(d.notes);
-        if (looksHtml) updBody.innerHTML = d.notes;
-        else updBody.textContent = d.notes;
+        updBody.innerHTML = looksHtml ? d.notes : mdToHtml(d.notes);
       } else {
         updBody.textContent = '릴리즈 노트 없음.';
       }
