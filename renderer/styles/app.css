@@ -1177,6 +1177,33 @@ body { display: flex; flex-direction: column; }
 }
 .group-menu li.divider:hover { background: transparent; color: var(--tx-4); }
 .group-menu .group-new { color: var(--accent); font-weight: 500; }
+/* 그룹 항목 내부: 이름 + 삭제 버튼 */
+.group-menu li.group-item {
+  display: flex; align-items: center; gap: 6px;
+  padding-right: 4px;
+  overflow: visible;
+}
+.group-menu li.group-item .group-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group-menu li.group-item .group-del {
+  flex-shrink: 0;
+  background: transparent; border: 0;
+  color: var(--tx-4);
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font: 400 13px/1 var(--sans);
+  opacity: 0;
+  transition: opacity .12s, color .12s, background .12s;
+}
+.group-menu li.group-item:hover .group-del { opacity: 1; }
+.group-menu li.group-item .group-del:hover {
+  color: var(--err, #e05a5a);
+  background: rgba(224,90,90,.12);
+}
 .group-menu .group-input-row { padding: 4px; }
 .group-menu .group-input {
   width: 100%;

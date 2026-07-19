@@ -25,6 +25,38 @@ const masterVal     = $('master-val');
 let items = [];
 let selectedId = null;
 let currentPlayer = null;
+let _mountId = 0;   // race guard: mountPlayer가 await 중일 때 사용자가 다른 곡을 클릭해도 stale mount가 Player를 만들지 않도록
+
+// ── 곡별 설정 영속화 (videoPath 키로 4/6-stem 형제 공유) ────────
+const SONG_SETTINGS_PREFIX = 'yss:song-settings:';
+let _currentSongKey = null;
+let _restoringSettings = false;   // 복원 중엔 save 안 함 (echo 방지)
+
+function songKeyOf(item) {
+  const p = String(item?.videoPath || '').replace(/\\/g, '/').toLowerCase();
+  return p ? (SONG_SETTINGS_PREFIX + p) : null;
+}
+function loadSongSettings(item) {
+  const k = songKeyOf(item);
+  if (!k) return null;
+  try { const raw = localStorage.getItem(k); return raw ? JSON.parse(raw) : null; }
+  catch { return null; }
+}
+function _mutateSettings(fn) {
+  if (_restoringSettings || !_currentSongKey) return;
+  let cur = {};
+  try { cur = JSON.parse(localStorage.getItem(_currentSongKey) || '{}') || {}; } catch {}
+  fn(cur);
+  cur.updatedAt = Date.now();
+  try { localStorage.setItem(_currentSongKey, JSON.stringify(cur)); } catch {}
+}
+const saveMaster    = (v)         => _mutateSettings(s => { s.masterVol = v; });
+const saveSpeed     = (v)         => _mutateSettings(s => { s.speed = v; });
+const saveSource    = (src)       => _mutateSettings(s => { s.source = src; });
+const saveKey       = (k)         => _mutateSettings(s => { s.keyShift = k; });
+const saveLoop      = (a, b, en)  => _mutateSettings(s => { s.loopA = a; s.loopB = b; s.loopEnabled = !!en; });
+const saveTrackVol  = (stem, vol) => _mutateSettings(s => { (s.trackVols  = s.trackVols  || {})[stem] = vol; });
+const saveTrackMute = (stem, mu)  => _mutateSettings(s => { (s.trackMutes = s.trackMutes || {})[stem] = !!mu; });
 
 function setErr(msg) {
   if (!msg) { playerErr.hidden = true; playerErr.textContent = ''; return; }
@@ -178,17 +210,23 @@ function destroyPlayer() {
 }
 
 async function mountPlayer(item) {
+  const myMountId = ++_mountId;
   destroyPlayer();
   setErr('');
   playerEmpty.hidden = true;
   playerSection.hidden = false;
   playerLoading.hidden = false;
 
+  _currentSongKey = songKeyOf(item);
+  _restoringSettings = true;   // 아래 초기화들이 저장을 덮어쓰지 않도록 guard 켜기 — restoreSongSettings 에서 최종 해제
+
   playerName.value = item.name;
   playerProv.textContent = `SR ${item.sampleRate || 44100}`;
 
   try {
     const { stems, sampleRate } = await loadStemFilesToBuffers(item.stemPaths);
+    // 사용자가 로드 중에 다른 곡을 선택했으면 이 mount는 중단 (이후 Player를 만들면 leak)
+    if (myMountId !== _mountId) { _restoringSettings = false; return; }
     const videoUrl = toYtsepUrl(item.videoPath);
     // 각 stem의 ytsep URL — HTMLAudioElement로 스트리밍 (배속 시 피치 보존)
     const stemUrls = {};
@@ -223,6 +261,7 @@ async function mountPlayer(item) {
         currentPlayer.setStemVolume(stem, v);
         const valEl = mixerTracks.querySelector(`[data-val="${stem}"]`);
         if (valEl) valEl.textContent = sl.value + '%';
+        saveTrackVol(stem, Number(sl.value));
       });
     });
     mixerTracks.querySelectorAll('.mixer-mute').forEach(btn => {
@@ -232,6 +271,7 @@ async function mountPlayer(item) {
         btn.classList.toggle('on', muted);
         const row = mixerTracks.querySelector(`.mixer-track[data-stem="${stem}"]`);
         row?.classList.toggle('muted', muted);
+        saveTrackMute(stem, muted);
       });
     });
 
@@ -243,11 +283,81 @@ async function mountPlayer(item) {
     resetKeyUI();
     updateGroupPickerLabel();
     updateReseparateAndToggle(item);
+
+    // 저장된 곡별 설정 복원
+    await restoreSongSettings(item);
   } catch (e) {
     console.error(e);
     setErr('로드 실패: ' + e.message);
+    _restoringSettings = false;   // 로드 실패 시 guard 해제 (안 그러면 다음부터 save 안 됨)
   } finally {
     playerLoading.hidden = true;
+  }
+}
+
+async function restoreSongSettings(item) {
+  const s = loadSongSettings(item);
+  if (!s) { _restoringSettings = false; return; }
+  try {
+    // Master
+    if (typeof s.masterVol === 'number') {
+      masterVol.value = s.masterVol;
+      masterVal.textContent = s.masterVol + '%';
+      currentPlayer?.setMasterVolume(s.masterVol / 100);
+    }
+    // 트랙 볼륨
+    if (s.trackVols) {
+      for (const [stem, vol] of Object.entries(s.trackVols)) {
+        const sl = mixerTracks.querySelector(`.mixer-slider[data-stem="${stem}"]`);
+        const valEl = mixerTracks.querySelector(`[data-val="${stem}"]`);
+        if (sl) sl.value = vol;
+        if (valEl) valEl.textContent = vol + '%';
+        currentPlayer?.setStemVolume(stem, Number(vol) / 100);
+      }
+    }
+    // 트랙 뮤트
+    if (s.trackMutes) {
+      for (const [stem, muted] of Object.entries(s.trackMutes)) {
+        if (!muted) continue;
+        // toggleMute 는 상태 반전 → 현재 unmuted 상태에서 한 번 호출하면 mute됨
+        const nowMuted = currentPlayer?.toggleMute(stem);
+        const btn = mixerTracks.querySelector(`.mixer-mute[data-stem="${stem}"]`);
+        const row = mixerTracks.querySelector(`.mixer-track[data-stem="${stem}"]`);
+        btn?.classList.toggle('on', !!nowMuted);
+        row?.classList.toggle('muted', !!nowMuted);
+      }
+    }
+    // Source
+    if (s.source === 'orig' && srcToggle) {
+      srcToggle.querySelectorAll('.source-btn').forEach(b => b.classList.toggle('on', b.dataset.src === 'orig'));
+      currentPlayer?.setOriginalMix(1);
+    }
+    // Speed
+    if (typeof s.speed === 'number' && s.speed !== 100) {
+      applySpeed(s.speed);
+    }
+    // Loop
+    if (s.loopA != null || s.loopB != null) {
+      if (s.loopA != null) currentPlayer?.setLoopA(s.loopA);
+      if (s.loopB != null) currentPlayer?.setLoopB(s.loopB);
+      if (s.loopEnabled) currentPlayer?.setLoopEnabled(true);
+      refreshLoopUI();
+    }
+    // Key shift (비동기 · 오래 걸림)
+    if (typeof s.keyShift === 'number' && s.keyShift !== 0) {
+      keyTarget = s.keyShift;
+      updateKeyUI();
+      const isEn = getLocale() === 'en';
+      keyStatus.textContent = isEn ? 'Restoring key…' : '이전 키 복원 중…';
+      keyProcessing = true;
+      updateKeyUI();
+      currentPlayer.setKeyShift(s.keyShift, ensureEncoderWorker())
+        .then(() => { keyStatus.textContent = ''; })
+        .catch(e => { keyStatus.textContent = (isEn ? 'Restore failed: ' : '복원 실패: ') + e.message; })
+        .finally(() => { keyProcessing = false; updateKeyUI(); });
+    }
+  } finally {
+    _restoringSettings = false;
   }
 }
 
@@ -255,6 +365,7 @@ masterVol.addEventListener('input', () => {
   const v = Number(masterVol.value) / 100;
   masterVal.textContent = masterVol.value + '%';
   currentPlayer?.setMasterVolume(v);
+  saveMaster(Number(masterVol.value));
 });
 
 // ── 다른 모델로 재분리 + 모델 토글 ─────────────────
@@ -351,6 +462,7 @@ function refreshLoopUI() {
   loopAVal.textContent = fmtLoopTime(st.a);
   loopBVal.textContent = fmtLoopTime(st.b);
   loopToggle.classList.toggle('on', !!st.enabled);
+  saveLoop(st.a, st.b, st.enabled);
 }
 function resetLoopUI() {
   currentPlayer?.resetLoop();
@@ -399,6 +511,7 @@ function applySpeed(pct) {
     // ratechange 이벤트 → Player가 stem audio들을 자동 sync
     playerVideo.playbackRate = pct / 100;
   }
+  saveSpeed(pct);
 }
 function resetSpeedUI() { applySpeed(100); }
 speedSlider?.addEventListener('input', () => applySpeed(Number(speedSlider.value)));
@@ -414,6 +527,7 @@ srcToggle?.addEventListener('click', (e) => {
   srcToggle.querySelectorAll('.source-btn').forEach(b => b.classList.toggle('on', b === btn));
   const isOrig = btn.dataset.src === 'orig';
   currentPlayer?.setOriginalMix(isOrig ? 1 : 0);
+  saveSource(isOrig ? 'orig' : 'stem');
 });
 function resetSourceToggle() {
   srcToggle?.querySelectorAll('.source-btn').forEach(b => b.classList.toggle('on', b.dataset.src === 'stem'));
@@ -459,6 +573,7 @@ keyApply?.addEventListener('click', async () => {
   try {
     await currentPlayer.setKeyShift(keyTarget, ensureEncoderWorker());
     keyStatus.textContent = '';
+    saveKey(keyTarget);
   } catch (e) {
     keyStatus.textContent = (isEn ? 'Failed: ' : '실패: ') + e.message;
   } finally {
@@ -488,6 +603,7 @@ function renderGroupMenu() {
   const groups = collectGroups();
   const cur = currentItem()?.group || '';
   groupMenu.innerHTML = '';
+  const isEn = getLocale() === 'en';
   const mkItem = (label, value, isDivider, isNew) => {
     const li = document.createElement('li');
     if (isDivider) li.className = 'divider';
@@ -501,14 +617,61 @@ function renderGroupMenu() {
     });
     groupMenu.appendChild(li);
   };
-  const isEn = getLocale() === 'en';
+  const mkGroupItem = (name) => {
+    const li = document.createElement('li');
+    li.className = 'group-item';
+    if (name === cur) li.classList.add('on');
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'group-name';
+    nameSpan.textContent = name;
+    const delBtn = document.createElement('button');
+    delBtn.className = 'group-del';
+    delBtn.type = 'button';
+    delBtn.textContent = '×';
+    delBtn.title = isEn ? 'Delete this group' : '이 그룹 삭제';
+    li.appendChild(nameSpan);
+    li.appendChild(delBtn);
+    li.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleGroupPick(name);
+    });
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      handleGroupDelete(name);
+    });
+    groupMenu.appendChild(li);
+  };
   mkItem(isEn ? '(No group)' : '(그룹 없음)', '');
   if (groups.length) {
     mkItem(isEn ? 'Existing groups' : '기존 그룹', null, true);
-    for (const g of groups) mkItem(g, g);
+    for (const g of groups) mkGroupItem(g);
   }
   mkItem(isEn ? 'New' : '신규', null, true);
   mkItem(isEn ? '+ Create new group…' : '+ 새 그룹 만들기…', '__new__', false, true);
+}
+
+async function handleGroupDelete(groupName) {
+  if (!groupName) return;
+  const isEn = getLocale() === 'en';
+  const affected = items.filter(x => x.group === groupName);
+  const count = new Set(affected.map(x => x.videoPath)).size;   // 4/6-stem sibling 중복 제거
+  const msg = isEn
+    ? `Delete the group "${groupName}"?\n${count} item(s) will be moved to "No group".`
+    : `"${groupName}" 그룹을 삭제할까요?\n이 그룹에 속한 ${count}개 항목이 "그룹 없음"으로 이동합니다.`;
+  if (!confirm(msg)) return;
+
+  // 각 아이템(중복 videoPath 포함)에서 그룹 제거. syncSiblings 로 4/6-stem 동시 반영.
+  const processed = new Set();
+  for (const it of affected) {
+    if (processed.has(it.videoPath)) continue;
+    processed.add(it.videoPath);
+    const res = await api.library.setGroup(it.id, '');
+    if (res.ok) syncSiblings(it.videoPath, { group: null });
+  }
+  updateGroupPickerLabel();
+  renderList();
+  renderGroupMenu();   // 메뉴가 열린 상태면 즉시 갱신
 }
 
 function showNewGroupInput() {
@@ -710,6 +873,12 @@ playerDel.addEventListener('click', async () => {
     : `"${item.name}" 을(를) 라이브러리에서 제거하시겠습니까?\n\n원본 파일(영상, 스템 wav)도 함께 삭제됩니다.`);
   if (!yes) return;
   await api.library.remove(selectedId, true);
+  // 형제(4/6-stem sibling)가 없으면 이 videoPath의 저장 설정도 제거
+  const sib = siblingItem(item);
+  if (!sib) {
+    const k = songKeyOf(item);
+    if (k) { try { localStorage.removeItem(k); } catch {} }
+  }
   destroyPlayer();
   playerSection.hidden = true;
   playerEmpty.hidden = false;
